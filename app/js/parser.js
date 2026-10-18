@@ -363,17 +363,49 @@
     return out;
   }
 
-  /* IndexedDB 记住上次的文件夹 */
+  /* IndexedDB：记住上次的文件夹；手机上把导入的音频保存在本机 */
+  let dbPromise = null;
   function idb() {
-    return new Promise((res, rej) => {
-      const r = indexedDB.open("nce4-island", 1);
-      r.onupgradeneeded = () => r.result.createObjectStore("kv");
+    if (dbPromise) return dbPromise;
+    dbPromise = new Promise((res, rej) => {
+      const r = indexedDB.open("nce-island", 2);
+      r.onupgradeneeded = () => {
+        const db = r.result;
+        if (!db.objectStoreNames.contains("kv")) db.createObjectStore("kv");
+        if (!db.objectStoreNames.contains("audio")) db.createObjectStore("audio");
+      };
       r.onsuccess = () => res(r.result);
-      r.onerror = () => rej(r.error);
+      r.onerror = () => { dbPromise = null; rej(r.error); };
+    });
+    return dbPromise;
+  }
+  async function tx(store, mode, fn) {
+    const db = await idb();
+    return new Promise((res, rej) => {
+      const t = db.transaction(store, mode);
+      const out = fn(t.objectStore(store));
+      t.oncomplete = () => res(out && "result" in out ? out.result : undefined);
+      t.onerror = () => rej(t.error);
+      t.onabort = () => rej(t.error || new Error("存储空间不足或被浏览器拒绝"));
     });
   }
-  async function idbSet(k, v) { const db = await idb(); return new Promise((res, rej) => { const tx = db.transaction("kv", "readwrite"); tx.objectStore("kv").put(v, k); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); }
-  async function idbGet(k) { const db = await idb(); return new Promise((res, rej) => { const tx = db.transaction("kv", "readonly"); const r = tx.objectStore("kv").get(k); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+  const idbSet = (k, v) => tx("kv", "readwrite", (st) => { st.put(v, k); });
+  const idbGet = (k) => tx("kv", "readonly", (st) => st.get(k));
+  // 把文件内容读成独立的 Blob 再保存，避免部分手机浏览器只保存“文件引用”
+  async function audioPut(id, file) {
+    const blob = new Blob([await file.arrayBuffer()], { type: file.type || "audio/mpeg" });
+    return tx("audio", "readwrite", (st) => { st.put({ name: file.name, blob }, id); });
+  }
+  async function audioAll() {
+    const db = await idb();
+    return new Promise((res, rej) => {
+      const out = {};
+      const req = db.transaction("audio", "readonly").objectStore("audio").openCursor();
+      req.onsuccess = () => { const c = req.result; if (c) { out[c.key] = c.value; c.continue(); } else res(out); };
+      req.onerror = () => rej(req.error);
+    });
+  }
+  const audioClear = () => tx("audio", "readwrite", (st) => { st.clear(); });
 
-  window.Parser = { detectLesson, detectBook, unitOf, MAXN, decode, parseLRC, parseSRT, parsePlainLesson, splitMultiLesson, splitSentences, processFiles, readDirHandle, idbSet, idbGet, AUDIO_EXT, TEXT_EXT, PDF_EXT };
+  window.Parser = { detectLesson, detectBook, unitOf, MAXN, decode, parseLRC, parseSRT, parsePlainLesson, splitMultiLesson, splitSentences, processFiles, readDirHandle, idbSet, idbGet, audioPut, audioAll, audioClear, AUDIO_EXT, TEXT_EXT, PDF_EXT };
 })();

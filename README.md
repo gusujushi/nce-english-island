@@ -92,6 +92,9 @@ app/
   js/grammar.js     语法库与句子自动分析
   js/parser.js      文件读取：识别册数和课号，解析 LRC / SRT / TXT / PDF
   js/app.js         主程序
-build.py            打包成单文件
+  icons/            手机桌面图标（由 tools/make_icons.py 生成）
+build.py            打包：电脑单文件版 + 手机版
 dist/               可直接双击打开的单文件版
+docs/               手机版（PWA），发布到 GitHub Pages
+tools/make_icons.py 生成桌面图标
 ```

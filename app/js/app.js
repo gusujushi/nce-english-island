@@ -44,7 +44,18 @@
   const AKEY = "nceisland.ai.v1";
   const safeGet = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } };
   const safeSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { toast("浏览器存储空间不足，进度可能无法保存"); return false; } };
-  const DEFAULT_SETTINGS = { voiceURI: "", rate: 0.9, showCn: true, apiKey: "", model: "claude-opus-5-5", theme: "auto", audioRate: 1, defaultBook: "" };
+  /* ---------------- 设备与安装 ---------------- */
+  const isTouch = () => window.matchMedia("(pointer: coarse)").matches;
+  const isNarrow = () => window.matchMedia("(max-width: 860px)").matches;
+  const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const isWeb = () => /^https?:$/.test(location.protocol);
+  let installPrompt = null;
+  window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installPrompt = e; const b = document.getElementById("installBtn"); if (b) b.classList.remove("hidden"); });
+  window.addEventListener("appinstalled", () => { installPrompt = null; toast("🎉 已添加到桌面"); });
+  if ("serviceWorker" in navigator && isWeb()) navigator.serviceWorker.register("sw.js").catch(() => {});
+
+  const DEFAULT_SETTINGS = { voiceURI: "", rate: 0.9, showCn: true, apiKey: "", model: "claude-opus-5-5", theme: "auto", audioRate: 1, defaultBook: "", keepAudio: isTouch() || isStandalone(), installHidden: false };
   const S = Object.assign({ startDate: null, plan: { days: 30, books: [1, 2, 3, 4] }, steps: {}, quiz: {}, reviewDone: {}, starred: {}, studyDays: [] }, safeGet(KEY, {}));
   S.settings = Object.assign({}, DEFAULT_SETTINGS, S.settings || {});
   let TEXTS = safeGet(TKEY, {});
@@ -218,16 +229,19 @@
     const on = (href) => (href === "#/" ? h === "#/" || h === "" : h.startsWith(href)) ? "on" : "";
     $("#nav").innerHTML = NAV.map(([href, ico, txt]) => `<a href="${href}" class="${on(href)}"><span class="ico">${ico}</span>${txt}</a>`).join("");
     $("#topbar").innerHTML = NAV.map(([href, ico, txt]) => `<a href="${href}" class="${on(href)}">${ico} ${txt}</a>`).join("");
+    $("#bottombar").innerHTML = [["#/", "🏠", "今日"], ["#/map", "🗺️", "地图"], ["#/lessons", "📚", "课程"], ["#/words", "⭐", "生词"], ["#/settings", "👤", "我的"]]
+      .map(([href, ico, txt]) => `<a href="${href}" class="${on(href) || (href === "#/settings" && /^#\/(files|method)/.test(h) ? "on" : "")}"><span class="ico">${ico}</span>${txt}</a>`).join("");
     $("#sideFoot").innerHTML = `课文 ${Object.keys(TEXTS).length}/${TOTAL_UNITS} · 音频 ${Object.keys(AUDIO).length}/${TOTAL_UNITS}<br>连续学习 ${streak()} 天 🔥`;
   }
   function render() {
     stopAudio(); if (window.speechSynthesis) speechSynthesis.cancel();
     closePop();
+    document.querySelectorAll(".backdrop").forEach((b) => b.remove());
     const parts = (location.hash || "#/").replace(/^#\//, "").split("/");
     navHTML();
     const main = $("#main");
     window.scrollTo(0, 0);
-    if (parts[0] === "") main.innerHTML = viewHome();
+    if (parts[0] === "") { main.innerHTML = viewHome(); bindInstall(main); }
     else if (parts[0] === "map") main.innerHTML = viewMap();
     else if (parts[0] === "lessons") main.innerHTML = viewLessons(+parts[1] || dominantBook(PLAN[currentDay() - 1]).b);
     else if (parts[0] === "lesson") { viewLesson(main, parts[1], parts[2] || "intro"); return; }
@@ -239,6 +253,28 @@
     else main.innerHTML = viewHome();
   }
   window.addEventListener("hashchange", render);
+
+  /* 添加到桌面的说明卡片 */
+  function installCard(compact) {
+    if (isStandalone()) return compact ? "" : `<div class="card install-card"><h3>📱 已作为 App 运行</h3><p class="small muted">你正在使用桌面图标打开的版本，可以离线使用。</p></div>`;
+    if (compact && (S.settings.installHidden || !isTouch())) return "";
+    let how;
+    if (!isWeb()) how = `当前是直接打开的本地文件，不能添加到桌面。请用手机浏览器打开本程序的网址（见使用说明里的“手机版”），再按提示添加。`;
+    else if (isIOS()) how = `请用 <b>Safari</b> 打开本页 → 点底部的 <b>分享</b> 按钮 <span style="font-size:16px">⬆️</span> → 选择 <b>“添加到主屏幕”</b> → 点“添加”。`;
+    else how = `点下面的按钮安装；如果没有按钮，打开浏览器菜单 <b>⋮</b> → 选择 <b>“添加到主屏幕 / 安装应用”</b>。`;
+    return `<div class="card install-card" style="margin-top:16px">
+      <div class="row spread"><h3 style="margin:0">📱 添加到手机桌面</h3>${compact ? `<button class="btn sm ghost" id="installHide">不再提示</button>` : ""}</div>
+      <p class="small" style="margin:8px 0">${how}</p>
+      <p class="small muted" style="margin:0 0 8px">添加后像 App 一样点图标打开：全屏显示、可以离线使用，导入的课文和音频都保存在手机里。</p>
+      <button class="btn primary ${installPrompt ? "" : "hidden"}" id="installBtn">⬇️ 安装到桌面</button>
+    </div>`;
+  }
+  function bindInstall(root) {
+    const b = $("#installBtn", root);
+    if (b) b.onclick = async () => { if (!installPrompt) return; installPrompt.prompt(); await installPrompt.userChoice.catch(() => {}); installPrompt = null; b.classList.add("hidden"); };
+    const h = $("#installHide", root);
+    if (h) h.onclick = () => { S.settings.installHidden = true; save(); render(); };
+  }
 
   /* ---------------- 首页 ---------------- */
   function viewHome() {
@@ -267,13 +303,14 @@
         <div class="bar" style="margin-top:14px;background:rgba(255,255,255,.35)"><i style="width:${pct}%;background:#fff"></i></div>
       </div>
       ${avgMinutes() > 150 ? `<div class="note small" style="margin-top:12px">⚡ 当前计划平均每天约 <b>${(avgMinutes() / 60).toFixed(1)} 小时</b>，强度很大。如果每天时间不够，可以到 <a href="#/settings">设置与计划</a> 改成 60 / 90 / 120 天，或只选部分册数——进度不会丢。</div>` : ""}
+      ${installCard(true)}
       ${noFiles ? `<div class="card" style="margin-top:16px;border-left:6px solid var(--i2)">
         <h3>👋 第一步：导入你下载的新概念英语 1–4 册</h3>
         <p class="muted">程序会读取你电脑里（如“下载”文件夹）的 MP3 原声与 LRC / TXT / PDF 课文；课文原文、逐句原声和彩色分析都基于你自己的文件。</p>
         <a class="btn primary" href="#/files">📂 去导入文件</a>
       </div>` : ""}
       <h2>📌 今日任务</h2>
-      ${p.type === "learn" ? `<div class="grid ${p.lessons.length > 4 ? "g3" : "g2"}">${p.lessons.map(taskCard).join("")}</div>` : p.type === "review" ? `<div class="grid g2">${reviewCard(p)}</div>` : `<div class="card">🌿 今天是自由日：去 <a href="#/words">生词本</a> 复习，或在 <a href="#/lessons">四册课程</a> 里挑一课做影子跟读。</div>`}
+      ${p.type === "learn" ? taskList(p.lessons) : p.type === "review" ? `<div class="grid g2">${reviewCard(p)}</div>` : `<div class="card">🌿 今天是自由日：去 <a href="#/words">生词本</a> 复习，或在 <a href="#/lessons">四册课程</a> 里挑一课做影子跟读。</div>`}
       <h2>📊 我的学习</h2>
       <div class="grid g4">
         <div class="card stat"><b>${doneLessons}</b><span class="muted small">已学完单元 / ${planIds.length}</span></div>
@@ -289,6 +326,16 @@
       <h2>🗓️ 本轮进度</h2>
       ${cycleBlock(Math.ceil(d / 5))}
     `;
+  }
+  /* 任务很多时（第一册一天二十多个单元）先显示未完成的前 6 个，其余折叠 */
+  function taskList(ids) {
+    const todo = ids.filter((id) => !lessonDone(id));
+    const first = (todo.length ? todo : ids).slice(0, 6);
+    const rest = ids.filter((id) => !first.includes(id));
+    const cls = ids.length > 4 ? "g3" : "g2";
+    return `<div class="grid ${cls}">${first.map(taskCard).join("")}</div>` + (rest.length ? `
+      <details style="margin-top:12px"><summary class="btn sm ghost" style="list-style:none;cursor:pointer">展开今天其余 ${rest.length} 个单元（已完成 ${ids.length - todo.length}）</summary>
+        <div class="grid ${cls}" style="margin-top:12px">${rest.map(taskCard).join("")}</div></details>` : "");
   }
   function taskCard(id) {
     const l = LMAP[id], B = bookOf(l), st = lessonSteps(id);
@@ -498,7 +545,7 @@
               ${s.t0 != null && hasAudio ? `<button class="icon-btn" data-tts="${s.i}" title="英式 TTS 慢读">🐢</button>` : ""}
             </div>
           </div>`).join("")}</div>
-        <div class="card panel" id="anaPanel"></div>
+        <div class="card panel sheet" id="anaPanel"></div>
       </div>
       ${doneBar(id, "read", "全文逐句精读完毕", B)}`;
     $("#toggleCn").onclick = () => { S.settings.showCn = !S.settings.showCn; save(); showCn = S.settings.showCn; $$(".sent .cn", body).forEach((e) => e.classList.toggle("hidden", !showCn)); $("#toggleCn").textContent = (showCn ? "隐藏" : "显示") + "中文"; };
@@ -506,9 +553,19 @@
     const highlight = (i) => { $$(".sent", body).forEach((e) => e.classList.toggle("playing", +e.dataset.i === i)); };
     $$("[data-play]", body).forEach((b) => b.onclick = (e) => { e.stopPropagation(); const s = sents[+b.dataset.play]; highlight(s.i); playSentence(id, s, () => highlight(-1)); });
     $$("[data-tts]", body).forEach((b) => b.onclick = (e) => { e.stopPropagation(); speak(sents[+b.dataset.tts].en, { rate: 0.75 }); });
+    const panel = $("#anaPanel");
+    const closeSheet = () => { panel.classList.remove("open"); const bd = $(".backdrop"); if (bd) bd.remove(); };
+    const openSheet = () => {
+      if (!isNarrow()) return;
+      panel.classList.add("open"); panel.scrollTop = 0;
+      if (!$(".backdrop")) { const bd = document.createElement("div"); bd.className = "backdrop"; bd.onclick = closeSheet; document.body.appendChild(bd); }
+    };
+    panel.addEventListener("click", (e) => { if (e.target.closest(".sheet-close")) closeSheet(); });
+    window.addEventListener("hashchange", closeSheet, { once: true });
     $$(".sent", body).forEach((el) => el.onclick = () => {
       $$(".sent", body).forEach((e) => e.classList.remove("on")); el.classList.add("on");
-      analyzeInto($("#anaPanel"), id, sents[+el.dataset.i], sents);
+      analyzeInto(panel, id, sents[+el.dataset.i], sents);
+      openSheet();
     });
     $("#playAll").onclick = () => {
       let i = 0;
@@ -541,8 +598,9 @@
     const cacheKey = "s:" + id + ":" + s.en;
     const hasAudio = s.t0 != null && AUDIO[id];
     panel.innerHTML = `
+      <div class="sheet-grip"></div>
       <div class="row spread"><h3 style="margin:0">🔍 第 ${s.i + 1} 句</h3>
-        <span class="chip">${dif.words} 词 · ${["", "⭐ 简单", "⭐⭐ 中等", "⭐⭐⭐ 长难句"][dif.level]}</span></div>
+        <span class="row" style="gap:6px"><span class="chip">${dif.words} 词 · ${["", "⭐ 简单", "⭐⭐ 中等", "⭐⭐⭐ 长难句"][dif.level]}</span><button class="btn sm sheet-close">✕</button></span></div>
       <div class="colored" style="margin-top:8px">${toks.map((t) => t.w ? `<span class="tk ${t.cls} ${t.vocab ? "vocab" : ""}" data-w="${esc(t.t)}" title="${esc(t.tip || "")}">${esc(t.t)}</span>` : esc(t.t)).join("")}</div>
       <div class="row" style="margin:6px 0 4px">
         <button class="btn sm" id="pPlay">${hasAudio ? "▶ 原声" : "🔊 英音"}</button>
@@ -861,8 +919,9 @@
       <div class="drop" id="drop">
         <div style="font-size:42px">🗂️</div>
         <p><b>支持：</b>MP3 / M4A / WAV 原声 · LRC 歌词（带时间轴，可逐句播放，推荐）· SRT 字幕 · TXT 文本 · PDF 课本</p>
+        ${isTouch() ? `<div class="note small" style="text-align:left;margin-bottom:10px">📱 <b>手机上导入：</b>先把新概念文件放进手机（iPhone 放进“文件”App，安卓放进“下载”文件夹）。<b>一册一册导入</b>最稳：先在下面选好“这次导入的是第几册”，再点“选择文件”，进入这一册的文件夹后<b>全选</b> MP3 和 LRC。</div>` : ""}
         <div class="row" style="justify-content:center;margin-bottom:10px">
-          <span class="small">认不出是第几册时，默认当作：</span>
+          <span class="small">${isTouch() ? "这次导入的是：" : "认不出是第几册时，默认当作："}</span>
           <select id="defBook" style="width:auto">
             <option value="">自动识别（推荐）</option>${BOOKS.map((B) => `<option value="${B.b}" ${String(S.settings.defaultBook) === String(B.b) ? "selected" : ""}>${B.name}</option>`).join("")}
           </select>
@@ -870,9 +929,11 @@
         <div class="row" style="justify-content:center">
           ${supportsDir ? `<button class="btn primary" id="pickDir">📁 选择文件夹（推荐）</button>` : ""}
           <label class="btn ${supportsDir ? "" : "primary"}">📁 ${supportsDir ? "兼容方式选择文件夹" : "选择文件夹"}<input type="file" id="dirInput" webkitdirectory directory multiple hidden></label>
-          <label class="btn">📄 选择文件<input type="file" id="fileInput" multiple hidden accept=".mp3,.m4a,.aac,.wav,.ogg,.flac,.lrc,.srt,.txt,.pdf"></label>
+          <label class="btn ${isTouch() ? "primary" : ""}">📄 选择文件<input type="file" id="fileInput" multiple hidden></label>
         </div>
-        <p class="muted small">也可以把文件或文件夹直接拖到这里。程序会根据文件夹名（如“新概念英语第二册”“NCE2”“Book 3”）、文件名和课文标题自动判断册数与课号。</p>
+        <p class="muted small">${isTouch() ? "程序会根据文件名和课文标题判断课号；手机上通常拿不到文件夹名，所以请先选好册数。" : "也可以把文件或文件夹直接拖到这里。程序会根据文件夹名（如“新概念英语第二册”“NCE2”“Book 3”）、文件名和课文标题自动判断册数与课号。"}</p>
+        <label class="row small" style="justify-content:center"><input type="checkbox" id="keepAudio" ${S.settings.keepAudio ? "checked" : ""}> 把导入的音频保存到本机（手机推荐；下次打开不用重新导入）</label>
+        <div class="muted small" id="storageInfo"></div>
         <div id="reconnect"></div>
         <div id="prog" class="muted small"></div>
       </div>
@@ -884,12 +945,23 @@
           ${nt ? `<button class="btn sm ghost" data-clearbook="${B.b}" style="margin-left:8px">清除本册课文</button>` : ""}</summary>
         <div style="overflow-x:auto;margin-top:8px"><table class="map"><thead><tr><th>课</th><th>标题</th><th>原声音频</th><th>课文原文</th><th></th></tr></thead><tbody>
         ${ls.map((l) => `<tr><td><b>${l.b === 1 ? l.n + "–" + (l.n + 1) : l.n}</b></td><td class="en">${esc(l.t)}</td>
-          <td>${AUDIO[l.id] ? "🎧 " + esc(AUDIO[l.id].file.name) : '<span class="muted">—</span>'}</td>
+          <td>${AUDIO[l.id] ? "🎧 " + esc(AUDIO[l.id].name) : '<span class="muted">—</span>'}</td>
           <td>${TEXTS[l.id] ? `📄 ${esc(TEXTS[l.id].file || "")} <span class="muted">(${TEXTS[l.id].source.toUpperCase()}，${TEXTS[l.id].sents.length} 句${TEXTS[l.id].sents.some((s) => s.t0 != null) ? "，有时间轴" : ""})</span>` : '<span class="muted">—</span>'}</td>
           <td>${TEXTS[l.id] ? `<button class="btn sm ghost" data-clear="${l.id}">清除</button>` : ""}</td></tr>`).join("")}
         </tbody></table></div>
       </details>`; }).join("")}
-      <p class="muted small">提示：课文文本会保存在浏览器里，下次打开无需重新导入；音频文件较大，每次打开程序需要重新选择文件夹（或点“重新连接”）。</p>`;
+      <p class="muted small">提示：课文文本会保存在浏览器里，下次打开无需重新导入。音频如果没有勾选“保存到本机”，每次打开程序需要重新选择文件夹（或点“重新连接”）。</p>
+      <button class="btn sm ghost" id="clearAudio" style="color:var(--bad)">清除已保存到本机的音频</button>`;
+    $("#keepAudio").onchange = (e) => { S.settings.keepAudio = e.target.checked; save(); };
+    $("#clearAudio").onclick = async () => {
+      if (!confirm("确定清除保存在本机的所有音频吗？（课文和学习进度不受影响）")) return;
+      await Parser.audioClear().catch(() => {});
+      Object.keys(AUDIO).forEach((k) => { if (AUDIO[k].url) URL.revokeObjectURL(AUDIO[k].url); delete AUDIO[k]; });
+      toast("已清除本机音频"); render();
+    };
+    if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then((e) => {
+      const el = $("#storageInfo"); if (el && e.quota) el.textContent = `本机已用存储 ${(e.usage / 1048576).toFixed(0)} MB / 可用约 ${(e.quota / 1048576 / 1024).toFixed(1)} GB`;
+    }).catch(() => {});
     const opts = () => ({ defaultBook: +$("#defBook").value || null });
     $("#defBook").onchange = (e) => { S.settings.defaultBook = e.target.value; save(); };
     const handle = async (files) => {
@@ -900,6 +972,7 @@
       lastUnmatched = r.unmatched;
       render();
       showImportLog(r);
+      await keepAudio(Object.entries(r.audio));
     };
     const pick = $("#pickDir");
     if (pick) pick.onclick = async () => {
@@ -946,11 +1019,37 @@
         $("#prog").textContent = "正在扫描文件夹……";
         const r = await Parser.processFiles(await Parser.readDirHandle(dir, dir.name + "/"), (i, t, name) => { $("#prog").textContent = `正在读取 ${i}/${t}：${name}`; }, opts());
         applyImport(r); lastUnmatched = r.unmatched; render(); showImportLog(r);
+        await keepAudio(Object.entries(r.audio));
       } catch (e) { toast("重新连接失败：" + e.message); }
     };
   }
+  function setAudio(id, file, name) {
+    if (AUDIO[id] && AUDIO[id].url) URL.revokeObjectURL(AUDIO[id].url);
+    AUDIO[id] = { file, name: name || file.name };
+  }
+  /* 把音频存进本机（IndexedDB），手机上下次打开不用重新导入 */
+  async function keepAudio(entries) {
+    if (!S.settings.keepAudio || !entries.length) return;
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+    const prog = $("#prog");
+    let ok = 0;
+    for (const [id, f] of entries) {
+      if (prog) prog.textContent = `正在把音频保存到本机 ${ok + 1}/${entries.length}：${f.name}`;
+      try { await Parser.audioPut(id, f); ok++; }
+      catch (e) { toast("保存音频失败：" + (e.message || "存储空间不足")); break; }
+    }
+    if (prog) prog.textContent = ok ? `✅ 已把 ${ok} 个音频保存到本机，下次打开可直接播放` : "";
+  }
+  async function loadKeptAudio() {
+    try {
+      const all = await Parser.audioAll();
+      let n = 0;
+      Object.entries(all).forEach(([id, v]) => { if (LMAP[id] && !AUDIO[id] && v && v.blob) { setAudio(id, v.blob, v.name); n++; } });
+      return n;
+    } catch (e) { return 0; }
+  }
   function applyImport(r) {
-    Object.entries(r.audio).forEach(([id, f]) => { if (AUDIO[id] && AUDIO[id].url) URL.revokeObjectURL(AUDIO[id].url); AUDIO[id] = { file: f }; });
+    Object.entries(r.audio).forEach(([id, f]) => setAudio(id, f));
     Object.entries(r.texts).forEach(([id, t]) => { TEXTS[id] = t; });
     saveTexts();
     const cnt = (o) => { const c = {}; Object.keys(o).forEach((id) => { const b = id.split("-")[0]; c[b] = (c[b] || 0) + 1; }); return Object.keys(c).sort().map((b) => `${b}册 ${c[b]}`).join("，") || "0"; };
@@ -976,7 +1075,7 @@
     $$("[data-un]", box).forEach((s) => s.onchange = async () => {
       const id = s.value; if (!id) return;
       const f = un[+s.dataset.un];
-      if (Parser.AUDIO_EXT.test(f.name)) AUDIO[id] = { file: f };
+      if (Parser.AUDIO_EXT.test(f.name)) { setAudio(id, f); keepAudio([[id, f]]); }
       else {
         const text = Parser.decode(await f.arrayBuffer());
         const p = /\.lrc$/i.test(f.name) ? Parser.parseLRC(text, id) : /\.srt$/i.test(f.name) ? Parser.parseSRT(text, id) : Parser.parsePlainLesson(text, id);
@@ -1035,7 +1134,9 @@
     const cur = pickVoice();
     const presets = [[30, "30 天冲刺（四册一个月）"], [60, "60 天（每天约一半时间）"], [90, "90 天（推荐，强度适中）"], [120, "120 天（每册约 30 天）"]];
     main.innerHTML = `<h1>⚙️ 设置与计划</h1>
-      <div class="grid g2">
+      <div class="row" style="margin-bottom:12px"><a class="btn" href="#/files">📂 我的课文文件</a><a class="btn" href="#/method">🧭 学习方法</a></div>
+      ${installCard(false)}
+      <div class="grid g2" style="margin-top:16px">
         <div class="card" style="border-top:5px solid var(--i5)"><h3>📅 学习计划</h3>
           <label class="small">学哪几册</label>
           <div class="row" style="margin:4px 0 10px">${BOOKS.map((B) => `<label class="chip" style="cursor:pointer;font-size:13px"><input type="checkbox" data-book="${B.b}" ${S.plan.books.includes(B.b) ? "checked" : ""}> ${B.emoji} ${B.name}</label>`).join("")}</div>
@@ -1047,7 +1148,7 @@
           <p class="muted small">今天是计划第 ${currentDay()} 天。修改计划或开始日期只会重新安排日程，已完成的进度都会保留。</p></div>
         <div class="card"><h3>🇬🇧 英式发音（TTS）</h3>
           ${gb.length ? `<select id="voice">${gb.map((v) => `<option value="${esc(v.voiceURI)}" ${cur && cur.voiceURI === v.voiceURI ? "selected" : ""}>${esc(v.name)}</option>`).join("")}</select>` :
-            `<div class="note small">⚠️ 没有检测到英式（en-GB）语音。建议：① 使用 <b>Microsoft Edge</b> 浏览器打开本程序（自带 Sonia、Ryan 等英式自然语音）；② 或在 Windows「设置 → 时间和语言 → 语音 → 添加语音」中添加 “English (United Kingdom)”。</div>`}
+            `<div class="note small">⚠️ 没有检测到英式（en-GB）语音。${isIOS() ? "iPhone：打开「设置 → 辅助功能 → 朗读内容 → 声音 → 英语」，下载一个“英国”的声音（如 Daniel、Kate、Serena），然后重新打开本程序。" : isTouch() ? "安卓：打开「设置 → 文字转语音输出 → 首选引擎（Google）→ 安装语音数据」，下载“英语（英国）”，然后重新打开本程序。" : "建议：① 使用 <b>Microsoft Edge</b> 浏览器打开本程序（自带 Sonia、Ryan 等英式自然语音）；② 或在 Windows「设置 → 时间和语言 → 语音 → 添加语音」中添加 “English (United Kingdom)”。"}</div>`}
           <div class="row" style="margin-top:10px"><span class="small">语速</span><input type="range" id="rate" min="0.6" max="1.2" step="0.05" value="${S.settings.rate}" style="flex:1"><span id="rateV">${S.settings.rate}</span></div>
           <button class="btn sm" id="testVoice" style="margin-top:8px">🔊 试听：“The weather in Britain is rather changeable.”</button>
           <label class="small" style="display:block;margin-top:12px">外观</label>
@@ -1062,6 +1163,7 @@
           <p class="small muted">进度保存在本机浏览器。换电脑或换浏览器前，请先导出备份。</p>
           <div class="row"><button class="btn sm" id="exp">⬇️ 导出进度</button><label class="btn sm">⬆️ 导入进度<input type="file" id="imp" accept=".json" hidden></label><button class="btn sm ghost" id="reset" style="color:var(--bad)">重置全部进度</button></div></div>
       </div>`;
+    bindInstall(main);
     const replan = () => { buildPlan(); save(); render(); };
     $$("[data-book]", main).forEach((c) => c.onchange = () => {
       const books = $$("[data-book]", main).filter((x) => x.checked).map((x) => +x.dataset.book);
@@ -1199,5 +1301,6 @@ ${text}
   /* ---------------- 启动 ---------------- */
   applyTheme();
   render();
+  loadKeptAudio().then((n) => { if (n) render(); });
   window.NCEApp = { S, TEXTS: () => TEXTS, AUDIO, PLAN: () => PLAN, LMAP, render };
 })();
