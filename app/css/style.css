@@ -345,3 +345,12 @@ table.map td, table.map th { border-bottom: 1px solid var(--line); padding: 6px 
   .sheet-close { display: inline-flex; }
   .backdrop { position: fixed; inset: 0; z-index: 55; background: rgba(0, 0, 0, .35); }
 }
+
+/* 返回上一页 */
+.backbar { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; min-width: 0; }
+.backbar .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.back-btn { min-height: 40px; padding-left: 12px; padding-right: 14px; font-weight: 700; flex-shrink: 0; }
+@media (max-width: 860px) {
+  .backbar { position: sticky; top: 0; z-index: 30; background: var(--bg); padding: calc(6px + env(safe-area-inset-top)) 0 8px; margin: calc(-14px - env(safe-area-inset-top)) 0 10px; }
+  .back-btn { min-height: 44px; }
+}
