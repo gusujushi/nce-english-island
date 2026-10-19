@@ -1,5 +1,5 @@
 // 离线缓存（由 build.py 生成，请勿手改）
-const CACHE = "nce-island-ef3db1c22e";
+const CACHE = "nce-island-f4c79feb6e";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {

@@ -2940,6 +2940,25 @@ NCE.addRows(3, [
   };
   const treeCache = {};
   let onlineBusy = false, onlineStop = false;
+  const onlineAborts = new Set();
+  /* 下载一个文件：25 秒收不到新数据就放弃这次请求（慢网下请求可能一直挂着不结束）；点“停止”立即中断 */
+  async function fetchBlob(url, type, onBytes) {
+    const ac = new AbortController(); onlineAborts.add(ac);
+    let timer;
+    const arm = () => { clearTimeout(timer); timer = setTimeout(() => ac.abort(), 25000); };
+    try {
+      arm();
+      const r = await fetch(url, { signal: ac.signal });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const len = +r.headers.get("content-length") || 0;
+      if (!r.body || !r.body.getReader) return await r.blob();
+      const rd = r.body.getReader(), parts = [];
+      let got = 0;
+      for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); got += value.length; arm(); if (onBytes) onBytes(got, len); }
+      if (len && got < len) throw new Error("下载不完整");
+      return new Blob(parts, { type });
+    } finally { clearTimeout(timer); onlineAborts.delete(ac); }
+  }
   async function onlineFiles(key, b) {
     const src = ONLINE[key];
     if (!treeCache[key]) {
@@ -2967,7 +2986,7 @@ NCE.addRows(3, [
     $$("[data-oacc]", main).forEach((b) => b.onclick = () => { S.settings.onlineAccent = b.dataset.oacc; save(); render(); });
     $$("[data-obook]", main).forEach((b) => b.onclick = () => onlineDownload(b.dataset.obook === "all" ? [1, 2, 3, 4] : [+b.dataset.obook]));
     const stop = $("#oStop", main);
-    if (stop) { stop.onclick = () => { onlineStop = true; stop.textContent = "正在停止……"; }; if (onlineBusy) stop.classList.remove("hidden"); }
+    if (stop) { stop.onclick = () => { onlineStop = true; onlineAborts.forEach((ac) => ac.abort()); stop.textContent = "正在停止……"; }; if (onlineBusy) stop.classList.remove("hidden"); }
   }
   async function onlineDownload(books) {
     if (onlineBusy) { toast("正在下载中，请稍候"); return; }
@@ -2991,20 +3010,24 @@ NCE.addRows(3, [
           const name0 = list[i][0].path.split("/").pop();
           const d = Parser.detectLesson(name0, list[i][0].path, b);
           if (d && d.b && AUDIO[d.b + "-" + d.n] && TEXTS[d.b + "-" + d.n]) { skipped++; continue; }
-          prog(`第 ${b} 册 ${i + 1}/${list.length}：${name0.replace(/\.[^.]+$/, "")}`);
+          const label = `第 ${b} 册 ${i + 1}/${list.length}：${name0.replace(/\.[^.]+$/, "")}`;
+          prog(label);
           try {
             const files = await Promise.all(list[i].map(async (t) => {
               // jsDelivr CDN 优先（国内一般更快）；GitHub raw 兜底（它对带逗号的文件名会返回 Chrome 拒收的响应头）
               const enc = t.path.split("/").map(encodeURIComponent).join("/");
               const urls = [`https://cdn.jsdelivr.net/gh/${src.repo}@${src.branch}/${enc}`, `https://raw.githubusercontent.com/${src.repo}/${src.branch}/${enc}`];
-              let r = null;
-              for (let tries = 0; tries < 4 && !r; tries++) {
-                try { const x = await fetch(urls[tries % 2]); if (x.ok) r = x; } catch (e) {}
-                if (!r && tries >= 1) await new Promise((ok) => setTimeout(ok, 1200 * tries));
+              const name = t.path.split("/").pop(), isAudio = Parser.AUDIO_EXT.test(name);
+              const onBytes = isAudio ? (n, len) => prog(`${label}（${(n / 1048576).toFixed(1)}${len ? " / " + (len / 1048576).toFixed(1) : ""} MB）`) : null;
+              let blob = null;
+              for (let tries = 0; tries < 4 && !blob; tries++) {
+                if (onlineStop) throw new Error("STOP");
+                try { blob = await fetchBlob(urls[tries % 2], isAudio ? "audio/mpeg" : "text/plain", onBytes); } catch (e) {}
+                if (!blob && tries >= 1 && !onlineStop) await new Promise((ok) => setTimeout(ok, 1200 * tries));
               }
-              if (!r) throw new Error("下载失败");
-              const name = t.path.split("/").pop();
-              const f = new File([await r.blob()], name, { type: Parser.AUDIO_EXT.test(name) ? "audio/mpeg" : "text/plain" });
+              if (onlineStop) throw new Error("STOP");
+              if (!blob) throw new Error("下载失败");
+              const f = new File([blob], name, { type: isAudio ? "audio/mpeg" : "text/plain" });
               f._path = t.path;
               return f;
             }));
@@ -3015,6 +3038,7 @@ NCE.addRows(3, [
             for (const [id, f] of Object.entries(res.audio)) await Parser.audioPut(id, f);
             got++;
           } catch (e) {
+            if (e.message === "STOP") throw e;
             if (/quota|空间|storage/i.test(e.message || "")) throw new Error("手机存储空间不足，已停止下载");
             console.warn("在线下载失败：", name0, e);
             failed.push(name0.replace(/\.[^.]+$/, ""));
